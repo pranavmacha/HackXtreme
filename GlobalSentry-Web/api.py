@@ -74,25 +74,17 @@ USER_PROFILE = {
 
 # ─── India-Focused RSS Feed Configuration ────────────────────────────────────
 
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 FEEDS = {
     "epi": [
-        "https://health.economictimes.indiatimes.com/rss/topstories",
-        "https://timesofindia.indiatimes.com/rssfeeds/3908999.cms",
-        "https://indianexpress.com/section/lifestyle/health/feed/",
+        os.path.join(_BASE_DIR, "epi_feed.xml"),
     ],
     "eco": [
-        "https://timesofindia.indiatimes.com/rssfeeds/2647163.cms",
-        "https://www.ndtv.com/rss/india",
-        "https://indianexpress.com/section/india/feed/",
-        "https://reliefweb.int/updates/rss.xml?country=119",
+        os.path.join(_BASE_DIR, "eco_feed.xml"),
     ],
     "supply": [
-        # ── Original live feeds (uncomment when needed) ──
-        # "https://economictimes.indiatimes.com/rssfeeds/1200853.cms",
-        # "https://www.livemint.com/rss/companies",
-        # "https://indianexpress.com/section/business/feed/",
-        # ── Local simulated feed for hackathon demo ──
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "supply_feed.xml"),
+        os.path.join(_BASE_DIR, "supply_feed.xml"),
     ],
 }
 
@@ -604,7 +596,12 @@ def load_live_alerts() -> list:
     try:
         if os.path.exists(ALERTS_JSON_PATH):
             with open(ALERTS_JSON_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
+                alerts = json.load(f)
+            # Ensure every agent-produced alert has is_raw_feed=False
+            for a in alerts:
+                if "is_raw_feed" not in a:
+                    a["is_raw_feed"] = False
+            return alerts
     except Exception as e:
         print(f"[API] Failed to read alerts.json: {e}")
     return []
@@ -639,9 +636,12 @@ def run_real_agent_stream(headline: str, mode: str):
                 print(f"[API] Stream active node: {node_name}")
                 if _state["current_analysis"] and _state["current_analysis"]["headline"] == headline:
                     _state["current_analysis"]["active_node"] = node_name
-                    
+
+        print(f"[API] ✅ Agent stream completed for: {headline[:60]}")
     except Exception as e:
+        import traceback
         print(f"[API] Agent streaming failed: {e}")
+        traceback.print_exc()
     finally:
         os.chdir(original_cwd)
 
@@ -780,6 +780,23 @@ def get_raw_feed(mode: str, page: int = 1, per_page: int = 15):
         "has_next": page < total_pages,
         "mode": mode,
     }
+
+
+@app.get("/api/threat-counts")
+def get_threat_counts():
+    """Returns the total number of threat items per mode from the XML feeds,
+    plus how many have been processed by the agent so far."""
+    counts = {}
+    processed_alerts = load_live_alerts() + _state["triggered_analyses"]
+    for mode in ("epi", "eco", "supply"):
+        feed_items = get_cached_rss(mode)
+        processed_count = len([a for a in processed_alerts if a.get("mode") == mode and not a.get("is_raw_feed")])
+        counts[mode] = {
+            "total": len(feed_items),
+            "processed": processed_count,
+            "pending": len(feed_items) - processed_count,
+        }
+    return counts
 
 
 @app.get("/api/globe-threats")
@@ -941,6 +958,56 @@ def switch_mode(mode: str):
     return {"active_mode": mode, "switched_at": datetime.utcnow().isoformat()}
 
 
+@app.get("/api/convergence")
+def get_convergence():
+    """Returns all alerts with cross-mode convergence warnings (Neural Moat detections)."""
+    # Gather all agent-processed alerts
+    live_alerts = load_live_alerts()
+    sim_alerts = _state.get("triggered_analyses", [])
+    all_alerts = live_alerts + sim_alerts
+
+    # Filter only those with convergence_warning
+    convergent = [
+        a for a in all_alerts
+        if a.get("convergence_warning") and not a.get("is_raw_feed")
+    ]
+
+    # Build mode-pair link counts for the visualization
+    mode_links = {}
+    for a in convergent:
+        warning = a.get("convergence_warning", "")
+        src_mode = a.get("mode", "?")
+        # Detect linked mode from warning text
+        linked_mode = None
+        if "EPI-LINK" in warning or "epi" in warning.lower():
+            linked_mode = "epi"
+        elif "ECO-LINK" in warning or "eco" in warning.lower() or "flood" in warning.lower() or "climate" in warning.lower():
+            linked_mode = "eco"
+        elif "SUPPLY-LINK" in warning or "supply" in warning.lower() or "port" in warning.lower() or "shortage" in warning.lower():
+            linked_mode = "supply"
+        
+        if linked_mode and linked_mode != src_mode:
+            pair = tuple(sorted([src_mode, linked_mode]))
+            key = f"{pair[0]}-{pair[1]}"
+            mode_links[key] = mode_links.get(key, 0) + 1
+
+    # Qdrant memory stats
+    memory_count = 0
+    try:
+        from Radio.sentry import get_qdrant_client, COLLECTION_NAME
+        info = get_qdrant_client().get_collection(COLLECTION_NAME)
+        memory_count = info.points_count
+    except Exception:
+        memory_count = len(_processed_headlines)
+
+    return {
+        "convergence_alerts": convergent[:20],
+        "total": len(convergent),
+        "mode_links": mode_links,
+        "memory_vectors": memory_count,
+    }
+
+
 # ─── Autonomous Background Loop ───────────────────────────────────────────────
 
 # Threat-signal keywords — headlines containing these get analyzed FIRST
@@ -990,70 +1057,84 @@ async def autonomous_agent_loop():
     ]
 
     pipeline_nodes = ["profiler", "triage", "retriever", "analyst", "correlator", "validator", "notify", "archiver"]
+    BATCH_SIZE = 5  # Process 5 headlines per mode before rotating
         
     while True:
         try:
+            # Build per-mode queues of unprocessed headlines
+            queues = {}
             for mode in ("epi", "eco", "supply"):
-                headlines = fetch_rss_alerts(mode)
+                headlines = get_cached_rss(mode)
                 headlines = _prioritize_headlines(headlines)
-                
-                for feed_item in headlines:
-                    hl = feed_item["headline"]
-                    if hl in _processed_headlines:
+                queues[mode] = [h for h in headlines if h["headline"] not in _processed_headlines]
+
+            # Round-robin: take BATCH_SIZE from each mode, repeat until all exhausted
+            any_remaining = True
+            while any_remaining:
+                any_remaining = False
+                for mode in ("epi", "eco", "supply"):
+                    batch = queues[mode][:BATCH_SIZE]
+                    queues[mode] = queues[mode][BATCH_SIZE:]
+                    if not batch:
                         continue
+                    any_remaining = True
 
-                    print(f"\n[API] \U0001f575\ufe0f Auto-analyzing: {hl[:70]}...")
+                    for feed_item in batch:
+                        hl = feed_item["headline"]
+                        if hl in _processed_headlines:
+                            continue
 
-                    if AGENT_AVAILABLE:
-                        # ── Real agent path ──
-                        _state["current_analysis"] = {"headline": hl, "mode": mode, "active_node": "profiler"}
-                        pre_alerts = len(load_live_alerts())
-                        await asyncio.to_thread(run_real_agent_stream, hl, mode)
-                        post_alerts = len(load_live_alerts())
-                        if post_alerts == pre_alerts:
-                            _state["recent_rejections"].insert(0, {"headline": hl, "mode": mode, "timestamp": datetime.utcnow().isoformat()})
-                            _state["recent_rejections"] = _state["recent_rejections"][:10]
-                    else:
-                        # ── Simulated analysis pipeline ──
-                        # Walk through each pipeline node with realistic timing
-                        for node in pipeline_nodes:
-                            _state["current_analysis"] = {"headline": hl, "mode": mode, "active_node": node}
-                            await asyncio.sleep(random.uniform(0.4, 1.2))  # simulate processing time
+                        print(f"\n[API] \U0001f575\ufe0f Auto-analyzing [{mode.upper()}]: {hl[:60]}...")
 
-                        severity = random.randint(2, 5)
-                        confidence = round(random.uniform(0.65, 0.95), 2)
-                        loc = random.choice(sa_locations)
+                        if AGENT_AVAILABLE:
+                            # ── Real agent path ──
+                            _state["current_analysis"] = {"headline": hl, "mode": mode, "active_node": "profiler"}
+                            pre_alerts = len(load_live_alerts())
+                            await asyncio.to_thread(run_real_agent_stream, hl, mode)
+                            post_alerts = len(load_live_alerts())
+                            if post_alerts == pre_alerts:
+                                _state["recent_rejections"].insert(0, {"headline": hl, "mode": mode, "timestamp": datetime.utcnow().isoformat()})
+                                _state["recent_rejections"] = _state["recent_rejections"][:10]
+                        else:
+                            # ── Simulated analysis pipeline ──
+                            for node in pipeline_nodes:
+                                _state["current_analysis"] = {"headline": hl, "mode": mode, "active_node": node}
+                                await asyncio.sleep(random.uniform(0.4, 1.2))
 
-                        mode_analyses = {
-                            "epi": f"Epidemiological triage complete. Symptom pattern cross-matched with {random.randint(3, 12)} historical outbreaks. R0 estimation: {round(random.uniform(1.2, 4.5), 1)}.",
-                            "eco": f"Geophysical risk model applied. Satellite imagery cross-referenced. Affected population zone: {random.randint(50, 500)}K residents.",
-                            "supply": f"Supply chain dependency graph queried. {random.randint(2, 8)} Tier-1 suppliers in impact zone. ESG registry cross-checked. Disruption probability: {random.randint(60, 95)}%.",
-                        }
+                            severity = random.randint(2, 5)
+                            confidence = round(random.uniform(0.65, 0.95), 2)
+                            loc = random.choice(sa_locations)
 
-                        new_alert = {
-                            "id": str(uuid.uuid4()),
-                            "headline": hl,
-                            "mode": mode,
-                            "severity": severity,
-                            "confidence": confidence,
-                            "is_verified": confidence > 0.75,
-                            "source": feed_item.get("source", "RSS Intelligence Feed"),
-                            "timestamp": datetime.utcnow().isoformat(),
-                            "analysis": mode_analyses[mode],
-                            "convergence_warning": "\u26a0\ufe0f CONVERGENCE DETECTED: Cross-mode pattern match found in memory." if random.random() > 0.7 else None,
-                            "lat": loc["lat"],
-                            "lng": loc["lng"],
-                            "location": loc["location"],
-                            "is_raw_feed": False,
-                        }
-                        _state["triggered_analyses"].insert(0, new_alert)
+                            mode_analyses = {
+                                "epi": f"Epidemiological triage complete. Symptom pattern cross-matched with {random.randint(3, 12)} historical outbreaks. R0 estimation: {round(random.uniform(1.2, 4.5), 1)}.",
+                                "eco": f"Geophysical risk model applied. Satellite imagery cross-referenced. Affected population zone: {random.randint(50, 500)}K residents.",
+                                "supply": f"Supply chain dependency graph queried. {random.randint(2, 8)} Tier-1 suppliers in impact zone. ESG registry cross-checked. Disruption probability: {random.randint(60, 95)}%.",
+                            }
 
-                    _processed_headlines.add(hl)
-                    _state["current_analysis"] = None
-                    print(f"[API] \u2705 Analysis complete for: {hl[:50]}...")
-                    
-                    # Pause between analyses (looks realistic)
-                    await asyncio.sleep(random.uniform(3, 6))
+                            new_alert = {
+                                "id": str(uuid.uuid4()),
+                                "headline": hl,
+                                "mode": mode,
+                                "severity": severity,
+                                "confidence": confidence,
+                                "is_verified": confidence > 0.75,
+                                "source": feed_item.get("source", "RSS Intelligence Feed"),
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "analysis": mode_analyses[mode],
+                                "convergence_warning": "\u26a0\ufe0f CONVERGENCE DETECTED: Cross-mode pattern match found in memory." if random.random() > 0.7 else None,
+                                "lat": loc["lat"],
+                                "lng": loc["lng"],
+                                "location": loc["location"],
+                                "is_raw_feed": False,
+                            }
+                            _state["triggered_analyses"].insert(0, new_alert)
+
+                        _processed_headlines.add(hl)
+                        _state["current_analysis"] = None
+                        print(f"[API] \u2705 Analysis complete for: {hl[:50]}...")
+                        
+                        # Pause between analyses
+                        await asyncio.sleep(random.uniform(3, 6))
                         
         except Exception as e:
             print(f"[API] Error in autonomous loop: {e}")
