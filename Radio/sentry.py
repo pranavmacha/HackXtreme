@@ -14,7 +14,10 @@ from qdrant_client.http.models import (
 )
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+try:
+    load_dotenv(override=True)
+except UnicodeDecodeError:
+    print("[Warning] Could not load .env due to encoding issue (UTF-16 BOM). Skipping.")
 
 # ─── Infrastructure ────────────────────────────────────────────────────────
 
@@ -149,6 +152,9 @@ class AgentState(TypedDict):
     is_verified:          bool
     relevance_score:      float
     retry_count:          int            # Reflection loop counter (max 1 retry)
+    lat:                  float
+    lng:                  float
+    location:             str
     context:              List[str]
     logs:                 List[str]
 
@@ -165,6 +171,19 @@ def parse_severity_confidence(analysis: str):
         severity   = int(match.group(1))
         confidence = float(match.group(2))
     return severity, confidence
+
+def parse_location(text: str):
+    lat, lng = 0.0, 0.0
+    location = "Unknown"
+    match = re.search(r'LAT:\s*([-\d.]+)\s*\|\s*LNG:\s*([-\d.]+)\s*\|\s*LOCATION:\s*([^\n]+)', text, re.IGNORECASE)
+    if match:
+        try:
+            lat = float(match.group(1))
+            lng = float(match.group(2))
+            location = match.group(3).strip()
+        except:
+            pass
+    return lat, lng, location
 
 # ─── Nodes ────────────────────────────────────────────────────────────────
 
@@ -289,6 +308,41 @@ def analyst_node(state: AgentState):
         "severity_level":   severity,
         "confidence_score": confidence,
         "logs": state.get('logs', []) + [f"Analyst [{mode}]{pass_label}: Severity={severity} Confidence={confidence:.2f}"],
+    }
+
+
+def locator_node(state: AgentState):
+    """Agent D — Extracts geographic coordinates from the news event."""
+    news = state['news_item']
+    logs = state.get('logs', []) + ["Locator: Estimating coordinates..."]
+    
+    prompt = (
+        "ROLE: Geographic Locator Expert\n"
+        "Analyze the following event and identify the most likely location where it is happening.\n"
+        f"EVENT: {news}\n\n"
+        "End your response with EXACTLY this format, even if you are estimating:\n"
+        "LAT: <latitude_float> | LNG: <longitude_float> | LOCATION: <City, Country>"
+    )
+    
+    try:
+        response = analyst_llm.invoke(prompt).content.strip()
+        lat, lng, location = parse_location(response)
+        
+        if lat == 0.0 and lng == 0.0 and location == "Unknown":
+            logs[-1] += " Failed to parse location from LLM output. Defaulting to 0.0, 0.0."
+        else:
+            logs[-1] += f" Loc: {location} ({lat}, {lng})"
+    except Exception as e:
+        logs[-1] += f" Locator fallback: Could not extract location. Error: {e}"
+        lat, lng, location = 0.0, 0.0, "Unknown"
+
+    print(f"[Locator] {location} ({lat}, {lng})")
+    
+    return {
+        "lat": lat,
+        "lng": lng,
+        "location": location,
+        "logs": logs
     }
 
 
@@ -425,6 +479,9 @@ def notify_node(state: AgentState):
         "timestamp": _dt.utcnow().isoformat(),
         "analysis": state.get('threat_analysis', '')[:800],
         "convergence_warning": convergence if convergence else None,
+        "lat": state.get('lat', 0.0),
+        "lng": state.get('lng', 0.0),
+        "location": state.get('location', 'Unknown'),
     }
 
     # Append to alerts.json (shared with the web API)
@@ -521,6 +578,7 @@ workflow.add_node("profiler",    profiler_node)
 workflow.add_node("triage",      triage_node)
 workflow.add_node("retriever",   retriever_node)
 workflow.add_node("analyst",     analyst_node)
+workflow.add_node("locator",     locator_node)      # 🌍 Geo Locator
 workflow.add_node("correlator",  correlator_node)   # 🧠 Neural Moat
 workflow.add_node("validator",   validator_node)
 workflow.add_node("notify",      notify_node)
@@ -537,7 +595,8 @@ workflow.add_conditional_edges(
 )
 
 workflow.add_edge("retriever",  "analyst")
-workflow.add_edge("analyst",    "correlator")   # analyst → correlator (Neural Moat)
+workflow.add_edge("analyst",    "locator")      
+workflow.add_edge("locator",    "correlator")   # locator → correlator (Neural Moat)
 workflow.add_edge("correlator", "validator")    # correlator → validator
 
 # Reflection loop: validator can send control back to analyst

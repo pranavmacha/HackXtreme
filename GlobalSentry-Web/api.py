@@ -78,13 +78,20 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FEEDS = {
     "epi": [
-        os.path.join(_BASE_DIR, "epi_feed.xml"),
+        "https://health.economictimes.indiatimes.com/rss/topstories",
+        "https://timesofindia.indiatimes.com/rssfeeds/3908999.cms",
+        "https://indianexpress.com/section/lifestyle/health/feed/",
     ],
     "eco": [
-        os.path.join(_BASE_DIR, "eco_feed.xml"),
+        "https://timesofindia.indiatimes.com/rssfeeds/2647163.cms",
+        "https://www.ndtv.com/rss/india",
+        "https://indianexpress.com/section/india/feed/",
+        "https://reliefweb.int/updates/rss.xml?country=119",
     ],
     "supply": [
-        os.path.join(_BASE_DIR, "supply_feed.xml"),
+        "https://economictimes.indiatimes.com/rssfeeds/1200853.cms",
+        "https://www.livemint.com/rss/companies",
+        "https://indianexpress.com/section/business/feed/",
     ],
 }
 
@@ -682,6 +689,9 @@ def run_real_agent(headline: str, mode: str) -> dict:
             "timestamp": datetime.utcnow().isoformat(),
             "analysis": result.get("threat_analysis", "Analysis not available.")[:800],
             "convergence_warning": result.get("convergence_warning", "") or None,
+            "lat": result.get("lat", 0.0),
+            "lng": result.get("lng", 0.0),
+            "location": result.get("location", "Unknown"),
             "is_raw_feed": False,
         }
 
@@ -691,6 +701,7 @@ def run_real_agent(headline: str, mode: str) -> dict:
             ("Triage (Agent A)", "triage"),
             ("Retriever (RAG)", "retriever"),
             ("Analyst (Agent B)", "analyst"),
+            ("Locator (Geo)", "locator"),
             ("Correlator (Neural Moat)", "correlator"),
             ("Validator (Agent C)", "validator"),
             ("Reflection Loop", "retry"),
@@ -801,10 +812,17 @@ def get_threat_counts():
 
 @app.get("/api/globe-threats")
 def get_globe_threats():
-    """Returns all alerts across all modes with geo-coordinates — optimized for 3D globe rendering."""
+    """Returns all alerts across all modes with geo-coordinates, filtered for high severity (>= 4)."""
     all_threats = []
-    for mode in ("epi", "eco", "supply"):
-        for alert in MOCK_ALERTS[mode]:
+
+    # 1. Agent-processed live alerts
+    for alert in load_live_alerts():
+        if alert.get("severity", 3) >= 4:
+            all_threats.append(alert)
+
+    # 2. Triggered analyses (assign random South Asia coords if missing)
+    for alert in _state["triggered_analyses"]:
+        if alert.get("severity", 3) >= 4:
             all_threats.append({
                 "id": alert["id"],
                 "headline": alert["headline"],
@@ -814,32 +832,25 @@ def get_globe_threats():
                 "is_verified": alert["is_verified"],
                 "source": alert["source"],
                 "timestamp": alert["timestamp"],
-                "lat": alert.get("lat", 0),
-                "lng": alert.get("lng", 0),
-                "location": alert.get("location", "Unknown"),
+                "lat": alert.get("lat", 20 + random.uniform(-5, 10)),
+                "lng": alert.get("lng", 78 + random.uniform(-10, 15)),
+                "location": alert.get("location", "Triggered Location"),
                 "convergence_warning": alert.get("convergence_warning"),
             })
 
-    # Also include triggered analyses (assign random South Asia coords if missing)
-    for alert in _state["triggered_analyses"]:
-        all_threats.append({
-            "id": alert["id"],
-            "headline": alert["headline"],
-            "mode": alert["mode"],
-            "severity": alert["severity"],
-            "confidence": alert["confidence"],
-            "is_verified": alert["is_verified"],
-            "source": alert["source"],
-            "timestamp": alert["timestamp"],
-            "lat": alert.get("lat", 20 + random.uniform(-5, 10)),
-            "lng": alert.get("lng", 78 + random.uniform(-10, 15)),
-            "location": alert.get("location", "Triggered Location"),
-            "convergence_warning": alert.get("convergence_warning"),
-        })
+
+
+    # Deduplicate by ID
+    seen = set()
+    unique_threats = []
+    for a in all_threats:
+        if a["id"] not in seen:
+            seen.add(a["id"])
+            unique_threats.append(a)
 
     return {
-        "threats": all_threats,
-        "total": len(all_threats),
+        "threats": unique_threats,
+        "total": len(unique_threats),
         "region_focus": USER_PROFILE["region_of_interest"],
     }
 
@@ -941,7 +952,7 @@ def get_status():
         "current_analysis": _state["current_analysis"],
         "recent_rejections": _state.get("recent_rejections", []),
         "pipeline_nodes": [
-            "profiler", "triage", "retriever", "analyst",
+            "profiler", "triage", "retriever", "analyst", "locator",
             "correlator", "validator", "retry", "notify", "archiver"
         ],
         "data_source": "Live Indian RSS feeds -> Autonomous AI",
@@ -1056,7 +1067,7 @@ async def autonomous_agent_loop():
         {"lat": 31.55, "lng": 74.35, "location": "Lahore, Pakistan"},
     ]
 
-    pipeline_nodes = ["profiler", "triage", "retriever", "analyst", "correlator", "validator", "notify", "archiver"]
+    pipeline_nodes = ["profiler", "triage", "retriever", "analyst", "locator", "correlator", "validator", "notify", "archiver"]
     BATCH_SIZE = 5  # Process 5 headlines per mode before rotating
         
     while True:
