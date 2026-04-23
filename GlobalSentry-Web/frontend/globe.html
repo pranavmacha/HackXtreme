@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GlobalSentry — 3D Threat Globe</title>
-  <meta name="description" content="Interactive 3D globe visualization of global threats across Epidemic, Climate, and Supply Chain intelligence layers." />
+  <title>GlobalSentry — Satellite Threat Map</title>
+  <meta name="description" content="Interactive satellite visualization of global threats across Epidemic, Climate, and Supply Chain intelligence layers." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet" />
-  <script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
   <!-- Leaflet CSS & JS -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -37,7 +36,7 @@
     .globe-topbar {
       position: fixed;
       top: 0; left: 0; right: 0;
-      z-index: 100;
+      z-index: 1000;
       height: 56px;
       background: rgba(5, 8, 16, 0.85);
       backdrop-filter: blur(20px);
@@ -131,16 +130,14 @@
       color: #64748b;
     }
 
-    /* ─── Globe Container ─────────────────────────────── */
-    .globe-fullscreen {
+    /* ─── Map Container ───────────────────────────────── */
+    #mapViz {
       width: 100vw;
       height: 100vh;
-      position: relative;
-    }
-
-    #globeViz {
-      width: 100%;
-      height: 100%;
+      position: absolute;
+      top: 0; left: 0;
+      z-index: 10;
+      background: #050810;
     }
 
     /* ─── Floating Legend Panel ────────────────────────── */
@@ -154,7 +151,7 @@
       border: 1px solid rgba(148, 163, 184, 0.12);
       border-radius: 16px;
       padding: 20px 22px;
-      z-index: 50;
+      z-index: 500;
       min-width: 220px;
       box-shadow: 0 8px 32px rgba(0,0,0,0.4);
     }
@@ -221,7 +218,7 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
-      z-index: 50;
+      z-index: 500;
     }
     .globe-filter-btn {
       background: rgba(10, 14, 26, 0.88);
@@ -249,77 +246,6 @@
     .globe-filter-btn.active[data-mode="eco"] { border-color: var(--eco); background: rgba(245,158,11,0.12); }
     .globe-filter-btn.active[data-mode="supply"] { border-color: var(--supply); background: rgba(16,185,129,0.12); }
 
-    /* ─── Detailed Map Modal ──────────────────────────── */
-    .map-modal-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(5, 8, 16, 0.85);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      z-index: 1000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.3s ease;
-    }
-    .map-modal-overlay.active {
-      opacity: 1;
-      pointer-events: auto;
-    }
-    .map-modal-content {
-      width: 90%;
-      height: 85%;
-      max-width: 1200px;
-      background: #0f172a;
-      border: 1px solid rgba(148, 163, 184, 0.2);
-      border-radius: 16px;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-      transform: scale(0.95);
-      transition: transform 0.3s ease;
-    }
-    .map-modal-overlay.active .map-modal-content {
-      transform: scale(1);
-    }
-    .map-modal-header {
-      padding: 16px 24px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.1);
-      background: rgba(15, 23, 42, 0.95);
-    }
-    .map-modal-title {
-      font-family: var(--font-body);
-      font-size: 1.1rem;
-      color: #f8fafc;
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 80%;
-    }
-    .map-modal-close {
-      background: transparent;
-      border: none;
-      color: #94a3b8;
-      font-size: 1.8rem;
-      cursor: pointer;
-      line-height: 1;
-      transition: color 0.2s;
-    }
-    .map-modal-close:hover { color: #f8fafc; }
-    
-    #detailed-map {
-      flex: 1;
-      width: 100%;
-      background: #000;
-    }
-
     /* ─── Bottom Info Bar ─────────────────────────────── */
     .globe-bottom-bar {
       position: fixed;
@@ -329,7 +255,7 @@
       display: flex;
       align-items: center;
       gap: 24px;
-      z-index: 50;
+      z-index: 500;
       background: rgba(10, 14, 26, 0.88);
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
@@ -357,32 +283,49 @@
       flex-shrink: 0;
     }
 
-    /* ─── Globe Tooltip ──────────────────────────────── */
-    .globe-tooltip {
-      background: rgba(10, 14, 26, 0.95) !important;
+    /* ─── Leaflet Popup & Marker Overrides ───────────── */
+    .leaflet-popup-content-wrapper {
+      background: rgba(10, 14, 26, 0.95);
       backdrop-filter: blur(16px);
       border: 1px solid rgba(148, 163, 184, 0.15);
       border-radius: 14px;
-      padding: 16px 18px;
-      max-width: 340px;
-      font-family: var(--font-body);
-      pointer-events: none;
       box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      padding: 0;
     }
-    .globe-tooltip-headline {
+    .leaflet-popup-content {
+      margin: 16px 18px;
+      color: #f1f5f9;
+      font-family: var(--font-body);
+      line-height: 1.4;
+      min-width: 250px;
+    }
+    .leaflet-popup-tip {
+      background: rgba(10, 14, 26, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      border-top: none; border-left: none;
+    }
+    .leaflet-container a.leaflet-popup-close-button {
+      color: #94a3b8;
+      padding: 8px;
+      font-size: 16px;
+    }
+    .leaflet-container a.leaflet-popup-close-button:hover {
+      color: #f8fafc;
+    }
+
+    .popup-headline {
       font-size: 0.88rem;
       font-weight: 600;
       color: #f1f5f9;
       margin-bottom: 10px;
-      line-height: 1.4;
     }
-    .globe-tooltip-meta {
+    .popup-meta {
       display: flex;
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
     }
-    .globe-tooltip-badge {
+    .popup-badge {
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -392,10 +335,36 @@
       font-weight: 700;
       letter-spacing: 0.05em;
     }
-    .globe-tooltip-badge.epi { background: rgba(244,63,94,0.2); color: #f43f5e; }
-    .globe-tooltip-badge.eco { background: rgba(245,158,11,0.2); color: #f59e0b; }
-    .globe-tooltip-badge.supply { background: rgba(16,185,129,0.2); color: #10b981; }
-    .globe-tooltip-location { font-size: 0.72rem; color: #94a3b8; }
+    .popup-badge.epi { background: rgba(244,63,94,0.2); color: #f43f5e; }
+    .popup-badge.eco { background: rgba(245,158,11,0.2); color: #f59e0b; }
+    .popup-badge.supply { background: rgba(16,185,129,0.2); color: #10b981; }
+    .popup-location { font-size: 0.72rem; color: #94a3b8; }
+    
+    .marker-pulse-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+    }
+    .marker-pulse-core {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      z-index: 2;
+    }
+    .marker-pulse-ring {
+      position: absolute;
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      animation: marker-pulse-anim 2s infinite;
+      z-index: 1;
+    }
+    @keyframes marker-pulse-anim {
+      0% { transform: scale(0.5); opacity: 1; }
+      100% { transform: scale(2.5); opacity: 0; }
+    }
 
     /* ─── Responsive ─────────────────────────────────── */
     @media (max-width: 768px) {
@@ -416,7 +385,7 @@
         <span class="logo-text">Global<span class="accent">Sentry</span></span>
       </a>
       <div class="globe-topbar-divider"></div>
-      <div class="globe-topbar-title">🌐 3D Threat Globe</div>
+      <div class="globe-topbar-title">🛰️ Satellite Monitor</div>
     </div>
     <div class="globe-topbar-right">
       <div class="live-dot-globe"></div>
@@ -425,10 +394,8 @@
     </div>
   </div>
 
-  <!-- ═══ GLOBE ═══ -->
-  <div class="globe-fullscreen">
-    <div id="globeViz"></div>
-  </div>
+  <!-- ═══ MAP CONTAINER ═══ -->
+  <div id="mapViz"></div>
 
   <!-- ═══ FLOATING LEGEND ═══ -->
   <div class="globe-legend" id="globe-legend">
@@ -484,17 +451,6 @@
     </div>
   </div>
 
-  <!-- ═══ DETAILED MAP MODAL ═══ -->
-  <div class="map-modal-overlay" id="map-modal">
-    <div class="map-modal-content">
-      <div class="map-modal-header">
-        <div class="map-modal-title" id="map-modal-title">Live Satellite Feed</div>
-        <button class="map-modal-close" onclick="closeMapModal()">&times;</button>
-      </div>
-      <div id="detailed-map"></div>
-    </div>
-  </div>
-
   <script>
     // ─── Configuration ─────────────────────────────────
     const API_BASE = 'http://localhost:8000/api';
@@ -505,67 +461,39 @@
       supply: '#10b981',
     };
 
-    let globeInstance = null;
+    let mapInstance = null;
     let allThreats = [];
     let activeFilter = 'all';
+    let markersLayer = null;
 
-    // ─── Initialize Globe ──────────────────────────────
-    function initGlobe() {
-      const container = document.getElementById('globeViz');
-      if (!container || typeof Globe === 'undefined') return;
+    // ─── Initialize Map ──────────────────────────────
+    function initMap() {
+      // Create Leaflet Map pointing at South Asia initially
+      mapInstance = L.map('mapViz', { zoomControl: false }).setView([22, 78], 4);
+      
+      // Move zoom control to bottom right to avoid overlap with filters
+      L.control.zoom({ position: 'bottomright' }).addTo(mapInstance);
 
-      const globe = Globe()(container)
-        .globeImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-night.jpg')
-        .bumpImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/earth-topology.png')
-        .backgroundImageUrl('//cdn.jsdelivr.net/npm/three-globe/example/img/night-sky.png')
-        .showAtmosphere(true)
-        .atmosphereColor('#3a228a')
-        .atmosphereAltitude(0.25)
-        .width(container.offsetWidth)
-        .height(container.offsetHeight)
-        // Points layer
-        .pointAltitude(d => 0.01 + d.severity * 0.05)
-        .pointRadius(d => 0.35 + d.severity * 0.18)
-        .pointColor(d => GLOBE_COLORS[d.mode] || '#6366f1')
-        .pointLabel(d => buildTooltip(d))
-        .pointsMerge(false)
-        .onPointClick(d => {
-          if (d) showAlertPanel(d);
-        })
-        // Rings layer
-        .ringsData([])
-        .ringColor(() => t => `rgba(248,113,113,${1 - t})`)
-        .ringMaxRadius(4)
-        .ringPropagationSpeed(2)
-        .ringRepeatPeriod(1200);
+      // Add ESRI World Imagery (High Res Satellite)
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Imagery &copy; Esri',
+        maxZoom: 18
+      }).addTo(mapInstance);
+      
+      // Add street labels on top
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; CartoDB',
+          subdomains: 'abcd',
+          maxZoom: 18
+      }).addTo(mapInstance);
 
-      // Focus on South Asia
-      globe.pointOfView({ lat: 22, lng: 78, altitude: 2.2 }, 1500);
-
-      // Auto-rotate
-      globe.controls().autoRotate = true;
-      globe.controls().autoRotateSpeed = 0.35;
-      globe.controls().enableZoom = true;
-
-      // Pause rotation on interaction
-      let idleTimer;
-      const pauseRotation = () => {
-        clearTimeout(idleTimer);
-        globe.controls().autoRotate = false;
-        idleTimer = setTimeout(() => { globe.controls().autoRotate = true; }, 8000);
-      };
-      container.addEventListener('mousedown', pauseRotation);
-      container.addEventListener('touchstart', pauseRotation);
-
-      globeInstance = globe;
-
-      // Handle resize
-      window.addEventListener('resize', () => {
-        globe.width(window.innerWidth).height(window.innerHeight);
-      });
+      markersLayer = L.layerGroup().addTo(mapInstance);
 
       loadThreats();
       loadUserProfile();
+      
+      // Auto-refresh threats every 15s
+      setInterval(loadThreats, 15000);
     }
 
     // ─── Load Threats ──────────────────────────────────
@@ -580,7 +508,7 @@
           if (el) el.textContent = data.region_focus;
         }
       } catch {
-        allThreats = [];
+        // preserve old data if fetch fails
       }
 
       applyFilter();
@@ -618,37 +546,62 @@
     }
 
     function applyFilter() {
-      if (!globeInstance) return;
+      if (!markersLayer) return;
+      markersLayer.clearLayers();
 
       const filtered = activeFilter === 'all'
         ? allThreats
-        : allThreats.map(t => ({
-            ...t,
-            _dimmed: t.mode !== activeFilter,
-          }));
+        : allThreats.filter(t => t.mode === activeFilter);
 
-      // Update points
-      globeInstance
-        .pointsData(activeFilter === 'all' ? allThreats : allThreats)
-        .pointColor(d => {
-          const color = GLOBE_COLORS[d.mode] || '#6366f1';
-          if (activeFilter !== 'all' && d.mode !== activeFilter) return color + '30';
-          return color;
-        })
-        .pointAltitude(d => {
-          if (activeFilter !== 'all' && d.mode !== activeFilter) return 0.005;
-          return 0.01 + d.severity * 0.05;
-        })
-        .pointRadius(d => {
-          if (activeFilter !== 'all' && d.mode !== activeFilter) return 0.15;
-          return 0.35 + d.severity * 0.18;
+      filtered.forEach(d => {
+        const color = GLOBE_COLORS[d.mode] || '#6366f1';
+        
+        // Build Custom Marker HTML
+        const html = `
+          <div class="marker-pulse-wrapper">
+            <div class="marker-pulse-core" style="background:${color}; box-shadow:0 0 10px ${color}"></div>
+            <div class="marker-pulse-ring" style="border-color:${color}"></div>
+          </div>
+        `;
+        
+        const customIcon = L.divIcon({
+          className: 'threat-marker',
+          html: html,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+          popupAnchor: [0, -15]
         });
 
-      // Update rings
-      const critical = allThreats.filter(t =>
-        t.severity >= 4 && (activeFilter === 'all' || t.mode === activeFilter)
-      );
-      globeInstance.ringsData(critical);
+        const marker = L.marker([d.lat, d.lng], { icon: customIcon });
+        
+        // Build Popup content
+        const sevDots = Array.from({ length: 5 }, (_, i) =>
+          `<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:${
+            i < d.severity ? color : 'rgba(148,163,184,0.25)'
+          };"></span>`
+        ).join('');
+
+        const popupContent = `
+          <div class="popup-headline">${d.headline || 'Unknown Threat'}</div>
+          <div class="popup-meta">
+            <span class="popup-badge ${d.mode}">${d.mode.toUpperCase()}</span>
+            <span class="popup-location">📍 ${d.location || 'Unknown'}</span>
+          </div>
+          <div style="margin-top:8px; display:flex; align-items:center; gap:3px;">
+            ${sevDots}
+            <span style="color:#94a3b8; font-size:0.7rem; margin-left:6px;">Severity ${d.severity}/5</span>
+          </div>
+        `;
+        
+        marker.bindPopup(popupContent);
+        
+        // Zoom-in when marker clicked
+        marker.on('click', () => {
+          mapInstance.flyTo([d.lat, d.lng], 14, { duration: 1.5 });
+        });
+
+        markersLayer.addLayer(marker);
+      });
     }
 
     // ─── Update Counts ─────────────────────────────────
@@ -674,92 +627,8 @@
       if (bs) bs.textContent = supply;
     }
 
-    // ─── Build Tooltip ─────────────────────────────────
-    function buildTooltip(d) {
-      const color = GLOBE_COLORS[d.mode] || '#6366f1';
-      const sevDots = Array.from({ length: 5 }, (_, i) =>
-        `<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:${
-          i < d.severity ? color : 'rgba(148,163,184,0.25)'
-        };"></span>`
-      ).join('');
-
-      return `
-        <div class="globe-tooltip">
-          <div class="globe-tooltip-headline">${d.headline || 'Unknown Threat'}</div>
-          <div class="globe-tooltip-meta">
-            <span class="globe-tooltip-badge ${d.mode}">${d.mode.toUpperCase()}</span>
-            <span class="globe-tooltip-location">📍 ${d.location || 'Unknown'}</span>
-          </div>
-          <div style="margin-top:8px; display:flex; align-items:center; gap:3px;">
-            ${sevDots}
-            <span style="color:#94a3b8; font-size:0.7rem; margin-left:6px;">Severity ${d.severity}/5</span>
-          </div>
-        </div>
-      `;
-    }
-
-    // ─── Map Modal Controller ──────────────────────────
-    let leafletMap = null;
-    let leafletMarker = null;
-
-    function openMapModal(lat, lng, title) {
-      document.getElementById('map-modal-title').textContent = title || "Live Satellite Feed";
-      const modal = document.getElementById('map-modal');
-      modal.classList.add('active');
-      
-      if (!leafletMap) {
-        // Initialize Map
-        leafletMap = L.map('detailed-map').setView([lat, lng], 15);
-        
-        // Add ESRI World Imagery (High Res Satellite)
-        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-          attribution: 'Imagery &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
-          maxZoom: 18
-        }).addTo(leafletMap);
-        
-        // Add street labels on top for context
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; CartoDB',
-            subdomains: 'abcd',
-            maxZoom: 18
-        }).addTo(leafletMap);
-
-        // Custom pulsing marker icon
-        const pulsingIcon = L.divIcon({
-          className: 'custom-leaflet-marker',
-          html: `<div style="width:16px;height:16px;background:#f43f5e;border-radius:50%;box-shadow:0 0 15px #f43f5e;border:2px solid #fff;animation:ring-pulse-legend 1.5s infinite;"></div>`,
-          iconSize: [20, 20],
-          iconAnchor: [10, 10]
-        });
-
-        leafletMarker = L.marker([lat, lng], {icon: pulsingIcon}).addTo(leafletMap);
-        
-        // Invalidating size ensures the map renders properly if modal was hidden during init
-        setTimeout(() => leafletMap.invalidateSize(), 350);
-      } else {
-        leafletMap.setView([lat, lng], 15);
-        leafletMarker.setLatLng([lat, lng]);
-        setTimeout(() => leafletMap.invalidateSize(), 350);
-      }
-    }
-
-    function closeMapModal() {
-      document.getElementById('map-modal').classList.remove('active');
-    }
-
-    // ─── Show Alert Panel (on click) ───────────────────
-    function showAlertPanel(d) {
-      // Fly to the clicked point on the 3D globe briefly
-      globeInstance.pointOfView({ lat: d.lat, lng: d.lng, altitude: 0.8 }, 1000);
-      
-      // Auto-open the detailed Mapbox/Leaflet-style UI
-      setTimeout(() => {
-        openMapModal(d.lat, d.lng, d.headline);
-      }, 700);
-    }
-
     // ─── Init ──────────────────────────────────────────
-    document.addEventListener('DOMContentLoaded', initGlobe);
+    document.addEventListener('DOMContentLoaded', initMap);
   </script>
 </body>
 </html>
